@@ -49,8 +49,19 @@ async function notifyApp(episodeId, reelId, status, finalUrl = null, progress = 
     }
 }
 
-async function uploadToGCS(localPath, gcsPath, onProgress) {
-    console.log(`[GCS Upload] Starting upload of ${localPath} to gs://${BUCKET_NAME}/${gcsPath}`);
+// Retry configuration
+const RETRY_CONFIG = {
+    maxRetries: 3,
+    baseDelay: 1000, // 1 second
+    maxDelay: 10000  // 10 seconds max
+};
+
+async function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function uploadToGCS(localPath, gcsPath, onProgress, retryCount = 0) {
+    console.log(`[GCS Upload] Starting upload of ${localPath} to gs://${BUCKET_NAME}/${gcsPath}${retryCount > 0 ? ` (Retry ${retryCount}/${RETRY_CONFIG.maxRetries})` : ''}`);
     try {
         // Get file size for progress calculation
         const stats = await fs.stat(localPath);
@@ -115,7 +126,34 @@ async function uploadToGCS(localPath, gcsPath, onProgress) {
         });
     } catch (e) {
         console.error(`[GCS Upload] Failed for ${gcsPath}:`, e.message);
-        throw new Error(`Failed to upload file to GCS: ${gcsPath}. ${e}`);
+
+        // Retry logic with exponential backoff
+        if (retryCount < RETRY_CONFIG.maxRetries) {
+            const delay = Math.min(
+                RETRY_CONFIG.baseDelay * Math.pow(2, retryCount),
+                RETRY_CONFIG.maxDelay
+            );
+            console.log(`[GCS Upload] Retrying in ${delay/1000}s... (${retryCount + 1}/${RETRY_CONFIG.maxRetries})`);
+
+            // Emit retry event
+            io.emit('upload-retry', {
+                gcsPath,
+                retryCount: retryCount + 1,
+                maxRetries: RETRY_CONFIG.maxRetries,
+                delayMs: delay,
+                error: e.message
+            });
+            io.emit('log', {
+                message: `إعادة محاولة الرفع (${retryCount + 1}/${RETRY_CONFIG.maxRetries})`,
+                type: 'warning',
+                details: `انتظار ${delay/1000} ثانية...`
+            });
+
+            await sleep(delay);
+            return uploadToGCS(localPath, gcsPath, onProgress, retryCount + 1);
+        }
+
+        throw new Error(`Failed to upload file to GCS after ${RETRY_CONFIG.maxRetries} retries: ${gcsPath}. ${e}`);
     }
 }
 
@@ -123,6 +161,8 @@ async function uploadToGCS(localPath, gcsPath, onProgress) {
 const jobQueue = [];
 let isProcessing = false;
 let watcher = null;
+let currentJob = null; // Track currently processing job
+let jobCancelled = false; // Flag for job cancellation
 const processedFilesInJob = new Set();
 const reelProgressMap = new Map(); // Track reel progress per job
 
@@ -208,7 +248,9 @@ async function processQueue() {
         return;
     }
     isProcessing = true;
+    jobCancelled = false; // Reset cancellation flag
     const job = jobQueue.shift();
+    currentJob = job; // Track current job for cancellation
     const { episodeId, reels, podcastCode, episodeCode } = job;
 
     console.log(`[Queue] Starting processing for job: ${episodeCode}`);
@@ -243,6 +285,7 @@ async function processQueue() {
 
     if (totalReelsToProcess === 0) {
         console.warn("[Job Processor] Job has no valid reels to process. Finishing job.");
+        currentJob = null;
         isProcessing = false;
         process.nextTick(processQueue);
         return;
@@ -371,6 +414,7 @@ async function processQueue() {
 
                 reelProgressMap.delete(progressKey);
                 processedFilesInJob.clear();
+                currentJob = null;
                 isProcessing = false;
                 emitQueueUpdate();
                 process.nextTick(processQueue);
@@ -402,6 +446,7 @@ async function processQueue() {
                 watcher?.off('add', onFileAdd);
                 clearTimeout(jobTimeout);
                 reelProgressMap.delete(progressKey);
+                currentJob = null;
                 isProcessing = false;
                 emitQueueUpdate();
                 process.nextTick(processQueue);
@@ -409,7 +454,46 @@ async function processQueue() {
         }
     }
 
+    // Function to handle job cancellation cleanup
+    function cleanupCancelledJob() {
+        console.log(`[Job Cancelled] Cleaning up cancelled job: ${episodeCode}`);
+        watcher?.off('add', onFileAdd);
+        clearTimeout(jobTimeout);
+
+        // Notify remaining reels as cancelled
+        reels.forEach((reel) => {
+            if (!processedReelIds.has(reel.id)) {
+                notifyApp(episodeId, reel.id, 'failed', null, 0, "Job was cancelled by user.");
+            }
+        });
+
+        io.emit('job-cancelled', { job, reason: 'user_request' });
+        io.emit('log', {
+            message: `تم إلغاء الوظيفة: ${episodeCode}`,
+            type: 'warning',
+            details: 'تم إلغاء الوظيفة بناءً على طلب المستخدم'
+        });
+
+        // Cleanup
+        const jsonFilename = `job-${episodeCode}-${job.timestamp}.json`;
+        const jsonFilePath = path.join(RENDER_JOBS_DIR, jsonFilename);
+        fs.unlink(jsonFilePath).catch(() => {});
+
+        reelProgressMap.delete(progressKey);
+        processedFilesInJob.clear();
+        currentJob = null;
+        jobCancelled = false;
+        isProcessing = false;
+        emitQueueUpdate();
+        process.nextTick(processQueue);
+    }
+
     const onFileAdd = async (filePath) => {
+        // Check for cancellation before processing
+        if (jobCancelled) {
+            cleanupCancelledJob();
+            return;
+        }
         const fileName = path.basename(filePath);
         const fileExt = path.extname(fileName).toLowerCase();
         const validExtensions = ['.mp4', '.mov'];
@@ -518,10 +602,19 @@ async function processQueue() {
              details: 'تم تجاوز 30 دقيقة'
          });
          reelProgressMap.delete(progressKey);
+         currentJob = null;
          isProcessing = false;
          emitQueueUpdate();
          process.nextTick(processQueue);
     }, 30 * 60 * 1000);
+
+    // Also check for cancellation periodically
+    const cancellationCheck = setInterval(() => {
+        if (jobCancelled) {
+            clearInterval(cancellationCheck);
+            cleanupCancelledJob();
+        }
+    }, 1000);
 }
 
 // Helper function to emit queue updates
@@ -551,6 +644,55 @@ app.get('/status', (_req, res) => {
         queueLength: jobQueue.length,
         isProcessing,
         watching: watcher ? RENDER_JOBS_DIR : "Not watching"
+    });
+});
+
+// Cancel a job (queued or currently processing)
+app.delete('/render/:episodeCode', async (req, res) => {
+    const { episodeCode } = req.params;
+    console.log(`[API /render] Cancel request for job: ${episodeCode}`);
+
+    // Check if it's the currently processing job
+    if (currentJob && currentJob.episodeCode === episodeCode) {
+        jobCancelled = true;
+        io.emit('log', {
+            message: `جاري إلغاء الوظيفة: ${episodeCode}`,
+            type: 'warning',
+            details: 'سيتم إلغاء الوظيفة بعد اكتمال العملية الحالية'
+        });
+        io.emit('job-cancelling', { episodeCode });
+        return res.status(200).json({
+            message: `Job ${episodeCode} is being cancelled.`,
+            status: 'cancelling'
+        });
+    }
+
+    // Check if it's in the queue
+    const jobIndex = jobQueue.findIndex(j => j.episodeCode === episodeCode);
+    if (jobIndex !== -1) {
+        const removedJob = jobQueue.splice(jobIndex, 1)[0];
+
+        // Delete the job JSON file
+        const jsonFilename = `job-${removedJob.episodeCode}-${removedJob.timestamp}.json`;
+        const jsonFilePath = path.join(RENDER_JOBS_DIR, jsonFilename);
+        await fs.unlink(jsonFilePath).catch(() => {});
+
+        io.emit('job-cancelled', { job: removedJob });
+        io.emit('log', {
+            message: `تم إلغاء الوظيفة: ${episodeCode}`,
+            type: 'success',
+            details: 'تم إزالة الوظيفة من قائمة الانتظار'
+        });
+        emitQueueUpdate();
+
+        return res.status(200).json({
+            message: `Job ${episodeCode} has been cancelled and removed from queue.`,
+            status: 'cancelled'
+        });
+    }
+
+    return res.status(404).json({
+        error: `Job ${episodeCode} not found in queue or currently processing.`
     });
 });
 

@@ -229,6 +229,30 @@
             background: #dc2626;
         }
 
+        .btn-cancel {
+            background: #fee2e2;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .btn-cancel:hover {
+            background: #fecaca;
+            border-color: #f87171;
+        }
+
+        .btn-cancel:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .queue-item.cancelling {
+            border-right-color: #f59e0b;
+            background: #fffbeb;
+            opacity: 0.7;
+        }
+
         .filter-group {
             display: flex;
             gap: 10px;
@@ -1123,6 +1147,22 @@
             showNotification(`فشل: ${data.fileName}`, 'error');
         });
 
+        // Job cancellation events
+        socket.on('job-cancelling', (data) => {
+            addLog(`جاري إلغاء الوظيفة: ${data.episodeCode}`, 'warning');
+            showNotification(`جاري إلغاء: ${data.episodeCode}`, 'info');
+        });
+
+        socket.on('job-cancelled', (data) => {
+            addLog(`تم إلغاء الوظيفة: ${data.job.episodeCode}`, 'warning', data.reason === 'user_request' ? 'تم الإلغاء بناءً على طلب المستخدم' : '');
+            showNotification(`تم إلغاء: ${data.job.episodeCode}`, 'success');
+        });
+
+        // Upload retry events
+        socket.on('upload-retry', (data) => {
+            addLog(`إعادة محاولة الرفع (${data.retryCount}/${data.maxRetries})`, 'warning', `انتظار ${data.delayMs/1000} ثانية - ${data.error}`);
+        });
+
         // Upload progress events
         socket.on('upload-started', (data) => {
             addLog(`بدء رفع الملف: ${data.fileName}`, 'info');
@@ -1206,14 +1246,19 @@
                 const progress = totalReels > 0 ? (completedReels / totalReels) * 100 : 0;
 
                 return `
-                    <div class="queue-item ${isProcessing ? 'processing' : ''}">
+                    <div class="queue-item ${isProcessing ? 'processing' : ''}" id="job-${job.episodeCode}">
                         <div class="queue-item-header">
                             <span class="queue-item-title">
                                 ${isProcessing ? '⚡' : '📄'} ${job.episodeCode || 'Unknown'}
                             </span>
-                            <span class="queue-item-badge ${isProcessing ? 'badge-processing' : 'badge-pending'}">
-                                ${isProcessing ? '<span class="pulse">●</span> جاري المعالجة' : '⏳ في الانتظار'}
-                            </span>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <span class="queue-item-badge ${isProcessing ? 'badge-processing' : 'badge-pending'}">
+                                    ${isProcessing ? '<span class="pulse">●</span> جاري المعالجة' : '⏳ في الانتظار'}
+                                </span>
+                                <button class="btn btn-cancel" onclick="cancelJob('${job.episodeCode}')" title="إلغاء الوظيفة">
+                                    ✕ إلغاء
+                                </button>
+                            </div>
                         </div>
                         <div class="queue-item-info">
                             <span class="info-item">📁 ${job.podcastCode || 'N/A'}</span>
@@ -1383,6 +1428,34 @@
         function toggleFullscreen(panelId) {
             // Simple fullscreen toggle implementation
             showNotification('ميزة التوسيع قيد التطوير', 'info');
+        }
+
+        async function cancelJob(episodeCode) {
+            if (!confirm(`هل أنت متأكد من إلغاء الوظيفة: ${episodeCode}؟`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/render/${episodeCode}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(data.message, 'success');
+                    // Mark job as cancelling in UI
+                    const jobEl = document.getElementById(`job-${episodeCode}`);
+                    if (jobEl) {
+                        jobEl.classList.add('cancelling');
+                    }
+                } else {
+                    showNotification(data.error || 'فشل إلغاء الوظيفة', 'error');
+                }
+            } catch (error) {
+                console.error('Cancel error:', error);
+                showNotification('حدث خطأ أثناء إلغاء الوظيفة', 'error');
+            }
         }
 
         // Search functionality
