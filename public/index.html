@@ -290,6 +290,42 @@
             background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
         }
 
+        .premiere-project-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 11px;
+            margin-top: 8px;
+            direction: ltr;
+            text-align: left;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        .premiere-project-input:focus {
+            outline: none;
+            border-color: #9333ea;
+            box-shadow: 0 0 0 3px rgba(147, 51, 234, 0.1);
+        }
+
+        .premiere-project-input::placeholder {
+            color: #9ca3af;
+            font-size: 10px;
+        }
+
+        .premiere-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .premiere-project-label {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 6px;
+        }
+
         /* Upload History Styles */
         .history-section {
             background: white;
@@ -1163,9 +1199,16 @@
                 </h3>
                 <div class="value" id="premiereStatus">جاري الفحص...</div>
                 <div class="label">
-                    <button class="btn btn-premiere" id="premiereBtn" onclick="togglePremiere()" style="margin-top: 8px; padding: 6px 12px; font-size: 12px;">
-                        تشغيل البريمير
-                    </button>
+                    <div class="premiere-controls">
+                        <input type="text"
+                               id="premiereProjectPath"
+                               class="premiere-project-input"
+                               placeholder="C:\Projects\MyProject.prproj">
+                        <span class="premiere-project-label">مسار ملف المشروع (اختياري)</span>
+                        <button class="btn btn-premiere" id="premiereBtn" onclick="togglePremiere()" style="padding: 6px 12px; font-size: 12px;">
+                            تشغيل البريمير
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1823,15 +1866,26 @@
             if (premiereRunning) return;
 
             const btnEl = document.getElementById('premiereBtn');
+            const projectPathEl = document.getElementById('premiereProjectPath');
+            const projectPath = projectPathEl.value.trim();
+
             btnEl.disabled = true;
             btnEl.textContent = 'جاري التشغيل...';
 
             try {
-                const response = await fetch('/premiere/start', { method: 'POST' });
+                const response = await fetch('/premiere/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectPath: projectPath || null })
+                });
                 const data = await response.json();
 
                 if (response.ok) {
                     showNotification(data.message, 'success');
+                    // Save project path to localStorage
+                    if (projectPath) {
+                        localStorage.setItem('premiereProjectPath', projectPath);
+                    }
                     // Wait a bit then check status
                     setTimeout(checkPremiereStatus, 3000);
                 } else {
@@ -1844,6 +1898,17 @@
                 showNotification('حدث خطأ أثناء تشغيل البريمير', 'error');
                 btnEl.disabled = false;
                 btnEl.textContent = 'تشغيل البريمير';
+            }
+        }
+
+        // Load saved project path on page load
+        function loadSavedProjectPath() {
+            const savedPath = localStorage.getItem('premiereProjectPath');
+            if (savedPath) {
+                const projectPathEl = document.getElementById('premiereProjectPath');
+                if (projectPathEl) {
+                    projectPathEl.value = savedPath;
+                }
             }
         }
 
@@ -1884,6 +1949,7 @@
         setTimeout(() => {
             socket.emit('request-status');
             checkPremiereStatus();
+            loadSavedProjectPath();
         }, 500);
 
         // Periodic status update

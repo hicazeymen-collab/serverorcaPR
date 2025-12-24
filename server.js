@@ -848,7 +848,8 @@ app.get('/premiere/status', async (_req, res) => {
     });
 });
 
-app.post('/premiere/start', async (_req, res) => {
+app.post('/premiere/start', async (req, res) => {
+    const { projectPath } = req.body || {};
     const isRunning = await isPremiereRunning();
 
     if (isRunning) {
@@ -858,7 +859,7 @@ app.post('/premiere/start', async (_req, res) => {
         });
     }
 
-    const started = await startPremiere();
+    const started = await startPremiere(projectPath || null);
 
     if (started) {
         return res.status(200).json({
