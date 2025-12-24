@@ -253,6 +253,43 @@
             opacity: 0.7;
         }
 
+        .btn-premiere {
+            background: linear-gradient(135deg, #9333ea 0%, #7c3aed 100%);
+            color: white;
+            border: none;
+        }
+
+        .btn-premiere:hover {
+            background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+            transform: translateY(-1px);
+        }
+
+        .btn-premiere:disabled {
+            background: #d1d5db;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-premiere.running {
+            background: #10b981;
+        }
+
+        #premiereCard.running {
+            border-right-color: #10b981;
+        }
+
+        #premiereCard.running::before {
+            background: linear-gradient(180deg, #10b981 0%, #059669 100%);
+        }
+
+        #premiereCard.stopped {
+            border-right-color: #ef4444;
+        }
+
+        #premiereCard.stopped::before {
+            background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+        }
+
         .filter-group {
             display: flex;
             gap: 10px;
@@ -964,6 +1001,21 @@
                 <div class="value" id="processingStatus">متوقف</div>
                 <div class="label">الحالة الحالية</div>
             </div>
+
+            <div class="stat-card" id="premiereCard">
+                <h3>
+                    <svg class="stat-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                    Adobe Premiere Pro
+                </h3>
+                <div class="value" id="premiereStatus">جاري الفحص...</div>
+                <div class="label">
+                    <button class="btn btn-premiere" id="premiereBtn" onclick="togglePremiere()" style="margin-top: 8px; padding: 6px 12px; font-size: 12px;">
+                        تشغيل البريمير
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Controls Bar -->
@@ -1161,6 +1213,14 @@
         // Upload retry events
         socket.on('upload-retry', (data) => {
             addLog(`إعادة محاولة الرفع (${data.retryCount}/${data.maxRetries})`, 'warning', `انتظار ${data.delayMs/1000} ثانية - ${data.error}`);
+        });
+
+        // Premiere Pro events
+        socket.on('premiere-started', (data) => {
+            updatePremiereStatus(true);
+            if (data.project) {
+                addLog(`تم تشغيل Premiere Pro مع المشروع`, 'success', data.project);
+            }
         });
 
         // Upload progress events
@@ -1430,6 +1490,75 @@
             showNotification('ميزة التوسيع قيد التطوير', 'info');
         }
 
+        // Premiere Pro functions
+        let premiereRunning = false;
+
+        async function checkPremiereStatus() {
+            try {
+                const response = await fetch('/premiere/status');
+                const data = await response.json();
+                updatePremiereStatus(data.running);
+                return data.running;
+            } catch (error) {
+                console.error('Error checking Premiere status:', error);
+                updatePremiereStatus(false);
+                return false;
+            }
+        }
+
+        function updatePremiereStatus(isRunning) {
+            premiereRunning = isRunning;
+            const statusEl = document.getElementById('premiereStatus');
+            const btnEl = document.getElementById('premiereBtn');
+            const cardEl = document.getElementById('premiereCard');
+
+            if (isRunning) {
+                statusEl.textContent = 'يعمل';
+                statusEl.style.color = '#10b981';
+                btnEl.textContent = 'يعمل';
+                btnEl.classList.add('running');
+                btnEl.disabled = true;
+                cardEl.classList.remove('stopped');
+                cardEl.classList.add('running');
+            } else {
+                statusEl.textContent = 'متوقف';
+                statusEl.style.color = '#ef4444';
+                btnEl.textContent = 'تشغيل البريمير';
+                btnEl.classList.remove('running');
+                btnEl.disabled = false;
+                cardEl.classList.remove('running');
+                cardEl.classList.add('stopped');
+            }
+        }
+
+        async function togglePremiere() {
+            if (premiereRunning) return;
+
+            const btnEl = document.getElementById('premiereBtn');
+            btnEl.disabled = true;
+            btnEl.textContent = 'جاري التشغيل...';
+
+            try {
+                const response = await fetch('/premiere/start', { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(data.message, 'success');
+                    // Wait a bit then check status
+                    setTimeout(checkPremiereStatus, 3000);
+                } else {
+                    showNotification(data.error || 'فشل تشغيل البريمير', 'error');
+                    btnEl.disabled = false;
+                    btnEl.textContent = 'تشغيل البريمير';
+                }
+            } catch (error) {
+                console.error('Error starting Premiere:', error);
+                showNotification('حدث خطأ أثناء تشغيل البريمير', 'error');
+                btnEl.disabled = false;
+                btnEl.textContent = 'تشغيل البريمير';
+            }
+        }
+
         async function cancelJob(episodeCode) {
             if (!confirm(`هل أنت متأكد من إلغاء الوظيفة: ${episodeCode}؟`)) {
                 return;
@@ -1466,12 +1595,18 @@
         // Request initial status
         setTimeout(() => {
             socket.emit('request-status');
+            checkPremiereStatus();
         }, 500);
 
         // Periodic status update
         setInterval(() => {
             socket.emit('request-status');
         }, 5000);
+
+        // Periodic Premiere status check
+        setInterval(() => {
+            checkPremiereStatus();
+        }, 10000);
     </script>
 </body>
 </html>

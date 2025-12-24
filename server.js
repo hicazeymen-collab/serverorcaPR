@@ -6,6 +6,7 @@ const chokidar = require('chokidar');
 const { Storage } = require('@google-cloud/storage');
 const http = require('http');
 const socketIO = require('socket.io');
+const { exec, spawn } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
@@ -23,6 +24,133 @@ const APP_HOSTING_URL = "https://studio--taskflow-studio.us-central1.hosted.app"
 const NOTIFY_ENDPOINT = `${APP_HOSTING_URL}/api/render-reels/worker`;
 
 const RENDER_JOBS_DIR = path.join(__dirname, 'render_jobs_temp');
+
+// --- Premiere Pro Configuration ---
+const PREMIERE_CONFIG = {
+    // Default Premiere Pro paths (will check both)
+    exePaths: [
+        process.env.PREMIERE_EXE_PATH,
+        'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2024\\Adobe Premiere Pro.exe',
+        'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2023\\Adobe Premiere Pro.exe',
+        'C:\\Program Files\\Adobe\\Adobe Premiere Pro CC 2022\\Adobe Premiere Pro.exe',
+        'C:\\Program Files\\Adobe\\Adobe Premiere Pro CC\\Adobe Premiere Pro.exe'
+    ].filter(Boolean),
+    projectPath: process.env.PREMIERE_PROJECT_PATH || null,
+    autoStart: process.env.PREMIERE_AUTO_START !== 'false', // Default true
+    processName: 'Adobe Premiere Pro.exe'
+};
+
+// --- Premiere Pro Functions ---
+function isPremiereRunning() {
+    return new Promise((resolve) => {
+        exec('tasklist /FI "IMAGENAME eq Adobe Premiere Pro.exe" /NH', (error, stdout) => {
+            if (error) {
+                console.error('[Premiere] Error checking process:', error.message);
+                resolve(false);
+                return;
+            }
+            const isRunning = stdout.toLowerCase().includes('adobe premiere pro');
+            resolve(isRunning);
+        });
+    });
+}
+
+async function findPremiereExe() {
+    const fsSync = require('fs');
+    for (const exePath of PREMIERE_CONFIG.exePaths) {
+        if (exePath && fsSync.existsSync(exePath)) {
+            return exePath;
+        }
+    }
+    return null;
+}
+
+async function startPremiere(projectPath = null) {
+    const premiereExe = await findPremiereExe();
+
+    if (!premiereExe) {
+        console.error('[Premiere] Adobe Premiere Pro not found. Please set PREMIERE_EXE_PATH environment variable.');
+        io.emit('log', {
+            message: 'لم يتم العثور على Adobe Premiere Pro',
+            type: 'error',
+            details: 'يرجى تعيين متغير البيئة PREMIERE_EXE_PATH'
+        });
+        return false;
+    }
+
+    const project = projectPath || PREMIERE_CONFIG.projectPath;
+
+    return new Promise((resolve) => {
+        let args = [];
+        let logMessage = 'جاري تشغيل Adobe Premiere Pro...';
+
+        if (project) {
+            const fsSync = require('fs');
+            if (fsSync.existsSync(project)) {
+                args.push(project);
+                logMessage = `جاري فتح المشروع: ${path.basename(project)}`;
+            } else {
+                console.warn(`[Premiere] Project file not found: ${project}`);
+                io.emit('log', {
+                    message: 'ملف المشروع غير موجود',
+                    type: 'warning',
+                    details: project
+                });
+            }
+        }
+
+        console.log(`[Premiere] Starting: "${premiereExe}" ${args.join(' ')}`);
+        io.emit('log', {
+            message: logMessage,
+            type: 'info'
+        });
+
+        const child = spawn(premiereExe, args, {
+            detached: true,
+            stdio: 'ignore'
+        });
+
+        child.unref();
+
+        child.on('error', (err) => {
+            console.error('[Premiere] Failed to start:', err.message);
+            io.emit('log', {
+                message: 'فشل تشغيل Adobe Premiere Pro',
+                type: 'error',
+                details: err.message
+            });
+            resolve(false);
+        });
+
+        // Give it a moment to start
+        setTimeout(() => {
+            console.log('[Premiere] Started successfully');
+            io.emit('log', {
+                message: 'تم تشغيل Adobe Premiere Pro بنجاح',
+                type: 'success'
+            });
+            io.emit('premiere-started', { project: project || null });
+            resolve(true);
+        }, 2000);
+    });
+}
+
+async function ensurePremiereRunning() {
+    if (!PREMIERE_CONFIG.autoStart) {
+        console.log('[Premiere] Auto-start is disabled');
+        return true;
+    }
+
+    const isRunning = await isPremiereRunning();
+
+    if (isRunning) {
+        console.log('[Premiere] Already running');
+        return true;
+    }
+
+    console.log('[Premiere] Not running, starting...');
+    return await startPremiere();
+}
 
 // --- Helper Functions ---
 async function notifyApp(episodeId, reelId, status, finalUrl = null, progress = 0, error = null) {
@@ -637,14 +765,55 @@ function emitQueueUpdate() {
 
 
 // --- Express Routes ---
-app.get('/status', (_req, res) => {
-    res.status(200).json({ 
-        status: 'ok', 
+app.get('/status', async (_req, res) => {
+    const premiereRunning = await isPremiereRunning();
+    res.status(200).json({
+        status: 'ok',
         message: `Render V2 server is running.`,
         queueLength: jobQueue.length,
         isProcessing,
-        watching: watcher ? RENDER_JOBS_DIR : "Not watching"
+        watching: watcher ? RENDER_JOBS_DIR : "Not watching",
+        premiere: {
+            running: premiereRunning,
+            autoStart: PREMIERE_CONFIG.autoStart,
+            projectPath: PREMIERE_CONFIG.projectPath
+        }
     });
+});
+
+// Premiere Pro control endpoints
+app.get('/premiere/status', async (_req, res) => {
+    const isRunning = await isPremiereRunning();
+    res.status(200).json({
+        running: isRunning,
+        autoStart: PREMIERE_CONFIG.autoStart,
+        projectPath: PREMIERE_CONFIG.projectPath
+    });
+});
+
+app.post('/premiere/start', async (_req, res) => {
+    const isRunning = await isPremiereRunning();
+
+    if (isRunning) {
+        return res.status(200).json({
+            message: 'Adobe Premiere Pro is already running.',
+            status: 'already_running'
+        });
+    }
+
+    const started = await startPremiere();
+
+    if (started) {
+        return res.status(200).json({
+            message: 'Adobe Premiere Pro started successfully.',
+            status: 'started'
+        });
+    } else {
+        return res.status(500).json({
+            error: 'Failed to start Adobe Premiere Pro.',
+            status: 'failed'
+        });
+    }
 });
 
 // Cancel a job (queued or currently processing)
@@ -703,6 +872,9 @@ app.post('/render', async (req, res) => {
     }
 
     console.log(`[API /render] Received new render job for episode ${job.episodeCode}. Adding to queue.`);
+
+    // Ensure Premiere Pro is running
+    await ensurePremiereRunning();
 
     try {
         await fs.mkdir(RENDER_JOBS_DIR, { recursive: true });
@@ -774,6 +946,12 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log(`[Server] Render V2 server listening on port ${PORT}`);
     console.log(`[Server] Dashboard available at: http://localhost:${PORT}`);
     console.log(`[Server] This server will save incoming JSON jobs and watch for .mp4 outputs.`);
+
+    // Start Premiere Pro if configured
+    if (PREMIERE_CONFIG.autoStart) {
+        console.log('[Server] Checking Adobe Premiere Pro...');
+        await ensurePremiereRunning();
+    }
 });
 
 // Graceful shutdown
