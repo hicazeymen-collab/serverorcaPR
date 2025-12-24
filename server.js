@@ -74,7 +74,7 @@ const PREMIERE_CONFIG = {
 // --- Premiere Pro Functions ---
 function isPremiereRunning() {
     return new Promise((resolve) => {
-        exec('tasklist /FI "IMAGENAME eq Adobe Premiere Pro.exe" /NH', (error, stdout) => {
+        exec('tasklist /FI "IMAGENAME eq Adobe Premiere Pro.exe" /NH', { windowsHide: true }, (error, stdout) => {
             if (error) {
                 console.error('[Premiere] Error checking process:', error.message);
                 resolve(false);
