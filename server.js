@@ -60,6 +60,7 @@ const PREMIERE_CONFIG = {
     // Default Premiere Pro paths (will check both)
     exePaths: [
         process.env.PREMIERE_EXE_PATH,
+        'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2025\\Adobe Premiere Pro.exe',
         'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2024\\Adobe Premiere Pro.exe',
         'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2023\\Adobe Premiere Pro.exe',
         'C:\\Program Files\\Adobe\\Adobe Premiere Pro CC 2022\\Adobe Premiere Pro.exe',
