@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Logs
+daemon/*.log
+*.log
+
+# Temporary render files
+render_jobs_temp/*.mp4
+render_jobs_temp/*.mov
+render_jobs_temp/*.json
+
+# Environment and credentials
+config/*.json
+.env
+
+# IDE
+.vscode/
+*.code-workspace
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Query file
+query

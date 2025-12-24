@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orca Render Server - لوحة التحكم</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .connection-info {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .connection-latency {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .latency-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .latency-good { background: #10b981; }
+        .latency-medium { background: #f59e0b; }
+        .latency-bad { background: #ef4444; }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .status-online {
+            background: #10b981;
+            color: white;
+        }
+
+        .status-offline {
+            background: #ef4444;
+            color: white;
+        }
+
+        .status-reconnecting {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+
+        .stat-card h3 {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-icon {
+            width: 20px;
+            height: 20px;
+        }
+
+        .stat-card .value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .label {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        .stat-change {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 8px;
+            margin-top: 8px;
+            display: inline-block;
+        }
+
+        .stat-change.positive {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .stat-change.negative {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .controls-bar {
+            background: white;
+            padding: 15px 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #4b5563;
+        }
+
+        .btn-secondary:hover {
+            background: #e5e7eb;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-right: auto;
+        }
+
+        .filter-label {
+            font-size: 14px;
+            color: #6b7280;
+            font-weight: 600;
+        }
+
+        .search-box {
+            padding: 8px 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            width: 250px;
+            transition: border-color 0.3s;
+        }
+
+        .search-box:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 20px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            max-height: 600px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .panel h2 {
+            color: #667eea;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .icon-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 6px;
+            transition: background 0.2s;
+            color: #6b7280;
+        }
+
+        .icon-btn:hover {
+            background: #f3f4f6;
+        }
+
+        .queue-container {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .queue-item {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-right: 4px solid #667eea;
+            transition: all 0.3s ease;
+        }
+
+        .queue-item:hover {
+            background: #f3f4f6;
+            transform: translateX(-5px);
+        }
+
+        .queue-item.processing {
+            border-right-color: #10b981;
+            background: #ecfdf5;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
+        }
+
+        .queue-item.failed {
+            border-right-color: #ef4444;
+            background: #fef2f2;
+        }
+
+        .queue-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .queue-item-title {
+            font-weight: bold;
+            color: #1f2937;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .queue-item-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .badge-pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-processing {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .queue-item-info {
+            color: #6b7280;
+            font-size: 14px;
+            display: flex;
+            gap: 15px;
+            margin-bottom: 8px;
+        }
+
+        .info-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .progress-container {
+            margin-top: 10px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s ease;
+            position: relative;
+        }
+
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255, 255, 255, 0.3),
+                transparent
+            );
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .progress-text {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .reel-progress {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .reel-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .reel-item {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            font-size: 13px;
+            transition: all 0.2s;
+            gap: 8px;
+        }
+
+        .reel-item:hover {
+            transform: translateX(-3px);
+        }
+
+        .reel-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+
+        .reel-item.reel-uploading {
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+            border: 1px solid #fbbf24;
+            box-shadow: 0 0 10px rgba(251, 191, 36, 0.3);
+        }
+
+        .reel-name {
+            color: #4b5563;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .reel-status {
+            padding: 3px 8px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+
+        .reel-pending {
+            background: #e5e7eb;
+            color: #6b7280;
+        }
+
+        .reel-processing {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .reel-uploading {
+            background: #fef3c7;
+            color: #92400e;
+            animation: uploadPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes uploadPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .reel-completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .reel-failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* Upload Progress Bar Styles */
+        .upload-progress-container {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .upload-progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .upload-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #fbbf24, #f59e0b);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+
+        .upload-progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255, 255, 255, 0.4),
+                transparent
+            );
+            animation: shimmer 1.5s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .upload-progress-text {
+            font-size: 11px;
+            color: #92400e;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        /* Waiting (File Writing) Progress Bar Styles */
+        .reel-item.reel-waiting {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            border: 1px solid #3b82f6;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+        }
+
+        .reel-waiting {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .waiting-progress-container {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .waiting-progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .waiting-progress-animation {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                #3b82f6 50%,
+                transparent 100%
+            );
+            animation: waitingWave 1.5s ease-in-out infinite;
+        }
+
+        @keyframes waitingWave {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .waiting-progress-text {
+            font-size: 11px;
+            color: #1e40af;
+            text-align: center;
+            font-weight: 600;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .elapsed-time {
+            background: #3b82f6;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            background: #1f2937;
+            border-radius: 10px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 8px;
+            border-radius: 4px;
+            line-height: 1.5;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .log-timestamp {
+            color: #9ca3af;
+            margin-left: 8px;
+        }
+
+        .log-info {
+            color: #60a5fa;
+            background: rgba(96, 165, 250, 0.1);
+        }
+
+        .log-success {
+            color: #34d399;
+            background: rgba(52, 211, 153, 0.1);
+        }
+
+        .log-warning {
+            color: #fbbf24;
+            background: rgba(251, 191, 36, 0.1);
+        }
+
+        .log-error {
+            color: #f87171;
+            background: rgba(248, 113, 113, 0.1);
+        }
+
+        .log-details {
+            margin-right: 80px;
+            opacity: 0.8;
+            font-size: 12px;
+            margin-top: 5px;
+            word-break: break-all;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 10px;
+            opacity: 0.5;
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            background: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            z-index: 1000;
+            transition: transform 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            max-width: 500px;
+        }
+
+        .notification.show {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .notification-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .notification.success .notification-icon {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .notification.error .notification-icon {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .notification.info .notification-icon {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 640px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .controls-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .filter-group {
+                margin-right: 0;
+            }
+        }
+
+        .pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: .5;
+            }
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #2d3748;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #667eea;
+        }
+
+        .tooltip {
+            position: relative;
+        }
+
+        .tooltip::before {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            right: 50%;
+            transform: translateX(50%);
+            background: #1f2937;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            margin-bottom: 5px;
+        }
+
+        .tooltip:hover::before {
+            opacity: 1;
+        }
+
+        .spinner {
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <h1>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
+                    </svg>
+                    Orca Render Server
+                </h1>
+                <div class="connection-info">
+                    <span id="serverUrl">http://localhost:6068</span>
+                    <div class="connection-latency">
+                        <span class="latency-dot latency-good" id="latencyDot"></span>
+                        <span id="latencyText">Ping: -- ms</span>
+                    </div>
+                </div>
+            </div>
+            <span id="serverStatus" class="status-badge status-offline">
+                <span class="spinner"></span>
+                يتصل...
+            </span>
+        </div>
+
+        <!-- Statistics Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>
+                    <svg class="stat-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                    </svg>
+                    قائمة الانتظار
+                </h3>
+                <div class="value" id="queueLength">0</div>
+                <div class="label">وظيفة في الانتظار</div>
+                <div class="stat-change positive" id="queueChange" style="display: none;">↑ +0</div>
+            </div>
+
+            <div class="stat-card">
+                <h3>
+                    <svg class="stat-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    الوظائف المعالجة
+                </h3>
+                <div class="value" id="processedJobs">0</div>
+                <div class="label">منذ بدء التشغيل</div>
+            </div>
+
+            <div class="stat-card">
+                <h3>
+                    <svg class="stat-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/>
+                    </svg>
+                    الريلات المكتملة
+                </h3>
+                <div class="value" id="completedReels">0</div>
+                <div class="label">ملف تم رفعه</div>
+            </div>
+
+            <div class="stat-card">
+                <h3>
+                    <svg class="stat-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    حالة المعالجة
+                </h3>
+                <div class="value" id="processingStatus">متوقف</div>
+                <div class="label">الحالة الحالية</div>
+            </div>
+        </div>
+
+        <!-- Controls Bar -->
+        <div class="controls-bar">
+            <div class="filter-group">
+                <span class="filter-label">بحث:</span>
+                <input type="text" class="search-box" id="searchBox" placeholder="ابحث في الوظائف...">
+            </div>
+
+            <button class="btn btn-secondary tooltip" data-tooltip="مسح السجل" onclick="clearLogs()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+                مسح السجل
+            </button>
+
+            <button class="btn btn-secondary tooltip" data-tooltip="تحديث" onclick="refreshStatus()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                تحديث
+            </button>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Queue Panel -->
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>
+                        <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+                        </svg>
+                        قائمة الوظائف
+                    </h2>
+                    <div class="panel-actions">
+                        <button class="icon-btn tooltip" data-tooltip="توسيع" onclick="toggleFullscreen('queuePanel')">
+                            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div id="queueContainer" class="queue-container">
+                    <div class="empty-state">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <p>لا توجد وظائف في قائمة الانتظار</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Panel -->
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>
+                        <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        سجل الأحداث
+                        <span id="logCount" style="font-size: 12px; color: #9ca3af; font-weight: normal;">(0)</span>
+                    </h2>
+                    <div class="panel-actions">
+                        <button class="icon-btn tooltip" data-tooltip="تنزيل السجل" onclick="downloadLogs()">
+                            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div id="logContainer" class="log-container">
+                    <div class="log-entry log-info">
+                        <span class="log-timestamp">[--:--:--]</span>
+                        <span>في انتظار الاتصال بالخادم...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="notification" class="notification">
+        <div class="notification-icon">✓</div>
+        <div id="notificationMessage"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let stats = {
+            processedJobs: 0,
+            completedReels: 0,
+            lastQueueLength: 0
+        };
+        let lastPingTime = 0;
+        let logCount = 0;
+        let allLogs = [];
+
+        // Connection status with latency tracking
+        socket.on('connect', () => {
+            lastPingTime = Date.now();
+            updateServerStatus('online');
+            addLog('تم الاتصال بالخادم بنجاح', 'success');
+            startLatencyCheck();
+        });
+
+        socket.on('disconnect', () => {
+            updateServerStatus('offline');
+            addLog('تم قطع الاتصال بالخادم', 'error');
+        });
+
+        socket.on('reconnecting', () => {
+            updateServerStatus('reconnecting');
+        });
+
+        // Latency tracking
+        function startLatencyCheck() {
+            setInterval(() => {
+                const start = Date.now();
+                socket.emit('ping');
+                socket.once('pong', () => {
+                    const latency = Date.now() - start;
+                    updateLatency(latency);
+                });
+            }, 5000);
+        }
+
+        function updateLatency(ms) {
+            const latencyText = document.getElementById('latencyText');
+            const latencyDot = document.getElementById('latencyDot');
+
+            latencyText.textContent = `Ping: ${ms} ms`;
+
+            latencyDot.className = 'latency-dot';
+            if (ms < 50) {
+                latencyDot.classList.add('latency-good');
+            } else if (ms < 150) {
+                latencyDot.classList.add('latency-medium');
+            } else {
+                latencyDot.classList.add('latency-bad');
+            }
+        }
+
+        // Server status updates
+        socket.on('status-update', (data) => {
+            updateDashboard(data);
+        });
+
+        // Queue updates
+        socket.on('queue-update', (queue) => {
+            renderQueue(queue);
+        });
+
+        // Log updates
+        socket.on('log', (logData) => {
+            addLog(logData.message, logData.type, logData.details);
+        });
+
+        // Job events
+        socket.on('job-started', (job) => {
+            addLog(`بدء معالجة الوظيفة: ${job.episodeCode}`, 'info');
+            showNotification(`بدء معالجة: ${job.episodeCode}`, 'info');
+        });
+
+        socket.on('job-completed', (job) => {
+            stats.processedJobs++;
+            document.getElementById('processedJobs').textContent = stats.processedJobs;
+            addLog(`اكتمال الوظيفة: ${job.episodeCode}`, 'success');
+            showNotification(`اكتملت الوظيفة: ${job.episodeCode}`, 'success');
+        });
+
+        socket.on('reel-completed', (data) => {
+            stats.completedReels++;
+            document.getElementById('completedReels').textContent = stats.completedReels;
+            addLog(`تم رفع الريل: ${data.fileName}`, 'success', data.url);
+        });
+
+        socket.on('reel-failed', (data) => {
+            addLog(`فشل رفع الريل: ${data.fileName}`, 'error', data.error);
+            showNotification(`فشل: ${data.fileName}`, 'error');
+        });
+
+        // Upload progress events
+        socket.on('upload-started', (data) => {
+            addLog(`بدء رفع الملف: ${data.fileName}`, 'info');
+        });
+
+        socket.on('upload-progress', (data) => {
+            // Update the progress in real-time (UI will update via queue-update)
+            console.log(`Upload progress: ${data.fileName} - ${data.percent}% (${data.uploadedMB}/${data.totalMB} MB)`);
+        });
+
+        function updateServerStatus(status) {
+            const statusEl = document.getElementById('serverStatus');
+            statusEl.className = 'status-badge';
+
+            if (status === 'online') {
+                statusEl.classList.add('status-online');
+                statusEl.innerHTML = '<span style="width:8px;height:8px;background:white;border-radius:50%;display:inline-block;"></span> متصل';
+            } else if (status === 'offline') {
+                statusEl.classList.add('status-offline');
+                statusEl.textContent = '✕ غير متصل';
+            } else if (status === 'reconnecting') {
+                statusEl.classList.add('status-reconnecting');
+                statusEl.innerHTML = '<span class="spinner"></span> إعادة الاتصال...';
+            }
+        }
+
+        function updateDashboard(data) {
+            const queueLength = data.queueLength || 0;
+            document.getElementById('queueLength').textContent = queueLength;
+            document.getElementById('processingStatus').textContent = data.isProcessing ? 'جاري المعالجة' : 'متوقف';
+
+            // Show queue change
+            const changeEl = document.getElementById('queueChange');
+            const diff = queueLength - stats.lastQueueLength;
+            if (diff !== 0) {
+                changeEl.textContent = diff > 0 ? `↑ +${diff}` : `↓ ${diff}`;
+                changeEl.className = diff > 0 ? 'stat-change positive' : 'stat-change negative';
+                changeEl.style.display = 'inline-block';
+                setTimeout(() => {
+                    changeEl.style.display = 'none';
+                }, 5000);
+            }
+            stats.lastQueueLength = queueLength;
+        }
+
+        function renderQueue(queue) {
+            const container = document.getElementById('queueContainer');
+            const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+
+            if (!queue || queue.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <p>لا توجد وظائف في قائمة الانتظار</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const filtered = queue.filter(job =>
+                !searchTerm ||
+                (job.episodeCode && job.episodeCode.toLowerCase().includes(searchTerm)) ||
+                (job.podcastCode && job.podcastCode.toLowerCase().includes(searchTerm))
+            );
+
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <p>لا توجد نتائج مطابقة للبحث</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = filtered.map((job, index) => {
+                const isProcessing = index === 0;
+                const completedReels = job.reelProgress ? job.reelProgress.completed : 0;
+                const totalReels = job.reels ? job.reels.length : 0;
+                const progress = totalReels > 0 ? (completedReels / totalReels) * 100 : 0;
+
+                return `
+                    <div class="queue-item ${isProcessing ? 'processing' : ''}">
+                        <div class="queue-item-header">
+                            <span class="queue-item-title">
+                                ${isProcessing ? '⚡' : '📄'} ${job.episodeCode || 'Unknown'}
+                            </span>
+                            <span class="queue-item-badge ${isProcessing ? 'badge-processing' : 'badge-pending'}">
+                                ${isProcessing ? '<span class="pulse">●</span> جاري المعالجة' : '⏳ في الانتظار'}
+                            </span>
+                        </div>
+                        <div class="queue-item-info">
+                            <span class="info-item">📁 ${job.podcastCode || 'N/A'}</span>
+                            <span class="info-item">🎬 ${totalReels} ريل</span>
+                            <span class="info-item">⏰ ${new Date(job.timestamp).toLocaleTimeString('ar-SA')}</span>
+                        </div>
+                        ${isProcessing ? `
+                            <div class="progress-container">
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${progress}%"></div>
+                                </div>
+                                <div class="progress-text">
+                                    <span>${completedReels} / ${totalReels}</span>
+                                    <span>${Math.round(progress)}%</span>
+                                </div>
+                            </div>
+                            <div class="reel-progress">
+                                <div class="reel-grid">
+                                    ${renderReelProgress(job.reels, job.reelProgress)}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderReelProgress(reels, progress) {
+            if (!reels || !progress) return '';
+
+            return reels.map(reel => {
+                const reelProgress = progress.reels[reel.id];
+                // Handle both old format (string) and new format (object)
+                const status = typeof reelProgress === 'object' ? reelProgress.status : (reelProgress || 'pending');
+                const uploadPercent = typeof reelProgress === 'object' ? (reelProgress.uploadPercent || 0) : 0;
+                const uploadedMB = typeof reelProgress === 'object' ? (reelProgress.uploadedMB || '0') : '0';
+                const totalMB = typeof reelProgress === 'object' ? (reelProgress.totalMB || '0') : '0';
+                const currentSizeMB = typeof reelProgress === 'object' ? (reelProgress.currentSizeMB || '0') : '0';
+                const isGrowing = typeof reelProgress === 'object' ? reelProgress.isGrowing : false;
+                const elapsedSeconds = typeof reelProgress === 'object' ? (reelProgress.elapsedSeconds || 0) : 0;
+
+                const statusClass = `reel-${status}`;
+                const statusEmoji = {
+                    'pending': '⏳',
+                    'waiting': '📝',
+                    'processing': '⚙️',
+                    'uploading': '⬆️',
+                    'completed': '✓',
+                    'failed': '✗'
+                }[status] || '?';
+
+                const statusText = {
+                    'pending': 'في الانتظار',
+                    'waiting': isGrowing ? 'جاري الكتابة...' : 'التحقق من الاكتمال',
+                    'processing': 'جاري العرض',
+                    'uploading': `جاري الرفع ${uploadPercent}%`,
+                    'completed': 'مكتمل',
+                    'failed': 'فشل'
+                }[status] || status;
+
+                // Show waiting progress bar if waiting for file completion
+                const waitingProgressBar = status === 'waiting' ? `
+                    <div class="waiting-progress-container">
+                        <div class="waiting-progress-bar">
+                            <div class="waiting-progress-animation"></div>
+                        </div>
+                        <div class="waiting-progress-text">
+                            ${isGrowing ? '📝' : '✓'} ${currentSizeMB} MB ${isGrowing ? '(جاري الكتابة)' : '(مستقر)'}
+                            <span class="elapsed-time">${elapsedSeconds}ث</span>
+                        </div>
+                    </div>
+                ` : '';
+
+                // Show upload progress bar if uploading
+                const uploadProgressBar = status === 'uploading' ? `
+                    <div class="upload-progress-container">
+                        <div class="upload-progress-bar">
+                            <div class="upload-progress-fill" style="width: ${uploadPercent}%"></div>
+                        </div>
+                        <div class="upload-progress-text">${uploadedMB} / ${totalMB} MB</div>
+                    </div>
+                ` : '';
+
+                return `
+                    <div class="reel-item ${status === 'uploading' ? 'reel-uploading' : ''} ${status === 'waiting' ? 'reel-waiting' : ''}">
+                        <div class="reel-item-header">
+                            <span class="reel-name" title="${reel.reelName || reel.id}">
+                                ${statusEmoji} ${(reel.reelName || reel.id).substring(0, 20)}...
+                            </span>
+                            <span class="reel-status ${statusClass}">${statusText}</span>
+                        </div>
+                        ${waitingProgressBar}
+                        ${uploadProgressBar}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function addLog(message, type = 'info', details = null) {
+            const container = document.getElementById('logContainer');
+            const timestamp = new Date().toLocaleTimeString('ar-SA', { hour12: false });
+
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry log-${type}`;
+            logEntry.innerHTML = `
+                <span class="log-timestamp">[${timestamp}]</span>
+                <span>${message}</span>
+                ${details ? `<div class="log-details">${details}</div>` : ''}
+            `;
+
+            container.appendChild(logEntry);
+            container.scrollTop = container.scrollHeight;
+
+            // Store in array
+            allLogs.push({ timestamp, message, type, details });
+            logCount++;
+            document.getElementById('logCount').textContent = `(${logCount})`;
+
+            // Keep only last 100 log entries in DOM
+            while (container.children.length > 100) {
+                container.removeChild(container.firstChild);
+            }
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.getElementById('notification');
+            const messageEl = document.getElementById('notificationMessage');
+
+            notification.className = `notification ${type}`;
+            messageEl.textContent = message;
+
+            notification.classList.add('show');
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        function clearLogs() {
+            document.getElementById('logContainer').innerHTML = '';
+            allLogs = [];
+            logCount = 0;
+            document.getElementById('logCount').textContent = '(0)';
+            addLog('تم مسح السجل', 'info');
+        }
+
+        function refreshStatus() {
+            socket.emit('request-status');
+            showNotification('تم تحديث الحالة', 'success');
+        }
+
+        function downloadLogs() {
+            const logsText = allLogs.map(log =>
+                `[${log.timestamp}] [${log.type.toUpperCase()}] ${log.message}${log.details ? '\n  ' + log.details : ''}`
+            ).join('\n');
+
+            const blob = new Blob([logsText], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `orca-logs-${new Date().toISOString()}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            showNotification('تم تنزيل السجل', 'success');
+        }
+
+        function toggleFullscreen(panelId) {
+            // Simple fullscreen toggle implementation
+            showNotification('ميزة التوسيع قيد التطوير', 'info');
+        }
+
+        // Search functionality
+        document.getElementById('searchBox').addEventListener('input', () => {
+            socket.emit('request-status');
+        });
+
+        // Request initial status
+        setTimeout(() => {
+            socket.emit('request-status');
+        }, 500);
+
+        // Periodic status update
+        setInterval(() => {
+            socket.emit('request-status');
+        }, 5000);
+    </script>
+</body>
+</html>
