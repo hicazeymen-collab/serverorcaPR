@@ -10,6 +10,9 @@ render_jobs_temp/*.mp4
 render_jobs_temp/*.mov
 render_jobs_temp/*.json
 
+# Failed render jobs
+render_jobs_failed/*.json
+
 # Environment and credentials
 config/*.json
 .env

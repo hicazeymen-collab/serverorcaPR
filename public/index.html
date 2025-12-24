@@ -1336,6 +1336,49 @@
         let lastPingTime = 0;
         let logCount = 0;
         let allLogs = [];
+        const MAX_STORED_LOGS = 500; // Maximum logs to store in localStorage
+
+        // Load logs from localStorage on startup
+        function loadStoredLogs() {
+            try {
+                const stored = localStorage.getItem('serverLogs');
+                if (stored) {
+                    allLogs = JSON.parse(stored);
+                    logCount = allLogs.length;
+                    document.getElementById('logCount').textContent = `(${logCount})`;
+
+                    const container = document.getElementById('logContainer');
+                    container.innerHTML = '';
+
+                    // Display last 100 logs
+                    const logsToShow = allLogs.slice(-100);
+                    logsToShow.forEach(log => {
+                        const logEntry = document.createElement('div');
+                        logEntry.className = `log-entry log-${log.type}`;
+                        logEntry.innerHTML = `
+                            <span class="log-timestamp">[${log.timestamp}]</span>
+                            <span>${log.message}</span>
+                            ${log.details ? `<div class="log-details">${log.details}</div>` : ''}
+                        `;
+                        container.appendChild(logEntry);
+                    });
+                    container.scrollTop = container.scrollHeight;
+                }
+            } catch (e) {
+                console.error('Error loading stored logs:', e);
+            }
+        }
+
+        // Save logs to localStorage
+        function saveLogsToStorage() {
+            try {
+                // Keep only last MAX_STORED_LOGS
+                const logsToSave = allLogs.slice(-MAX_STORED_LOGS);
+                localStorage.setItem('serverLogs', JSON.stringify(logsToSave));
+            } catch (e) {
+                console.error('Error saving logs:', e);
+            }
+        }
 
         // Connection status with latency tracking
         socket.on('connect', () => {
@@ -1647,6 +1690,7 @@
         function addLog(message, type = 'info', details = null) {
             const container = document.getElementById('logContainer');
             const timestamp = new Date().toLocaleTimeString('ar-SA', { hour12: false });
+            const fullTimestamp = new Date().toISOString(); // For storage
 
             const logEntry = document.createElement('div');
             logEntry.className = `log-entry log-${type}`;
@@ -1659,10 +1703,13 @@
             container.appendChild(logEntry);
             container.scrollTop = container.scrollHeight;
 
-            // Store in array
-            allLogs.push({ timestamp, message, type, details });
+            // Store in array with full timestamp
+            allLogs.push({ timestamp, fullTimestamp, message, type, details });
             logCount++;
             document.getElementById('logCount').textContent = `(${logCount})`;
+
+            // Save to localStorage
+            saveLogsToStorage();
 
             // Keep only last 100 log entries in DOM
             while (container.children.length > 100) {
@@ -1688,6 +1735,7 @@
             allLogs = [];
             logCount = 0;
             document.getElementById('logCount').textContent = '(0)';
+            localStorage.removeItem('serverLogs');
             addLog('تم مسح السجل', 'info');
         }
 
@@ -1904,11 +1952,27 @@
         // Load saved project path on page load
         function loadSavedProjectPath() {
             const savedPath = localStorage.getItem('premiereProjectPath');
-            if (savedPath) {
-                const projectPathEl = document.getElementById('premiereProjectPath');
-                if (projectPathEl) {
-                    projectPathEl.value = savedPath;
-                }
+            const projectPathEl = document.getElementById('premiereProjectPath');
+            if (savedPath && projectPathEl) {
+                projectPathEl.value = savedPath;
+            }
+
+            // Auto-save when input changes
+            if (projectPathEl) {
+                projectPathEl.addEventListener('input', () => {
+                    const path = projectPathEl.value.trim();
+                    if (path) {
+                        localStorage.setItem('premiereProjectPath', path);
+                    }
+                });
+
+                // Also save on blur (when user leaves the field)
+                projectPathEl.addEventListener('blur', () => {
+                    const path = projectPathEl.value.trim();
+                    if (path) {
+                        localStorage.setItem('premiereProjectPath', path);
+                    }
+                });
             }
         }
 
@@ -1944,6 +2008,9 @@
         document.getElementById('searchBox').addEventListener('input', () => {
             socket.emit('request-status');
         });
+
+        // Load stored data on page load
+        loadStoredLogs();
 
         // Request initial status
         setTimeout(() => {

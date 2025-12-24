@@ -24,6 +24,35 @@ const APP_HOSTING_URL = "https://studio--taskflow-studio.us-central1.hosted.app"
 const NOTIFY_ENDPOINT = `${APP_HOSTING_URL}/api/render-reels/worker`;
 
 const RENDER_JOBS_DIR = path.join(__dirname, 'render_jobs_temp');
+const FAILED_JOBS_DIR = path.join(__dirname, 'render_jobs_failed');
+
+// Helper function to move failed jobs
+async function moveJobToFailed(job) {
+    try {
+        await fs.mkdir(FAILED_JOBS_DIR, { recursive: true });
+        const jsonFilename = `job-${job.episodeCode}-${job.timestamp}.json`;
+        const sourcePath = path.join(RENDER_JOBS_DIR, jsonFilename);
+        const destPath = path.join(FAILED_JOBS_DIR, jsonFilename);
+
+        // Check if source exists
+        try {
+            await fs.access(sourcePath);
+            await fs.rename(sourcePath, destPath);
+            console.log(`[Failed Job] Moved job file to: ${destPath}`);
+            io.emit('log', {
+                message: `تم نقل الوظيفة الفاشلة: ${job.episodeCode}`,
+                type: 'warning',
+                details: `المسار: ${destPath}`
+            });
+        } catch (e) {
+            // File doesn't exist, create it in failed folder
+            await fs.writeFile(destPath, JSON.stringify(job, null, 2));
+            console.log(`[Failed Job] Created job file in failed folder: ${destPath}`);
+        }
+    } catch (error) {
+        console.error(`[Failed Job] Error moving job:`, error.message);
+    }
+}
 
 // --- Premiere Pro Configuration ---
 const PREMIERE_CONFIG = {
@@ -773,7 +802,7 @@ async function processQueue() {
     
     watcher.on('add', onFileAdd);
 
-    const jobTimeout = setTimeout(() => {
+    const jobTimeout = setTimeout(async () => {
          console.error(`[Job Timeout] Job for ${episodeCode} timed out after 30 minutes.`);
          watcher?.off('add', onFileAdd);
          reels.forEach((reel) => {
@@ -784,8 +813,12 @@ async function processQueue() {
          io.emit('log', {
              message: `انتهت مهلة الوظيفة: ${episodeCode}`,
              type: 'error',
-             details: 'تم تجاوز 30 دقيقة'
+             details: 'تم تجاوز 30 دقيقة - تم نقل الوظيفة إلى مجلد الفاشلة'
          });
+
+         // Move job to Failed folder instead of deleting
+         await moveJobToFailed(job);
+
          reelProgressMap.delete(progressKey);
          currentJob = null;
          isProcessing = false;
