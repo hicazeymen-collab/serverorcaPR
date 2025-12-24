@@ -294,6 +294,60 @@ let jobCancelled = false; // Flag for job cancellation
 const processedFilesInJob = new Set();
 const reelProgressMap = new Map(); // Track reel progress per job
 
+// Upload history tracking - grouped by episode code
+const uploadHistory = new Map(); // Map<episodeCode, Array<{fileName, url, timestamp, podcastCode}>>
+const MAX_HISTORY_PER_EPISODE = 50; // Keep last 50 files per episode
+const MAX_EPISODES_IN_HISTORY = 20; // Keep last 20 episodes
+
+function addToUploadHistory(episodeCode, podcastCode, fileName, url) {
+    const entry = {
+        fileName,
+        url,
+        timestamp: new Date().toISOString(),
+        podcastCode
+    };
+
+    if (!uploadHistory.has(episodeCode)) {
+        uploadHistory.set(episodeCode, []);
+    }
+
+    const episodeHistory = uploadHistory.get(episodeCode);
+    episodeHistory.unshift(entry); // Add to beginning
+
+    // Limit per episode
+    if (episodeHistory.length > MAX_HISTORY_PER_EPISODE) {
+        episodeHistory.pop();
+    }
+
+    // Limit total episodes (remove oldest)
+    if (uploadHistory.size > MAX_EPISODES_IN_HISTORY) {
+        const keys = Array.from(uploadHistory.keys());
+        uploadHistory.delete(keys[0]);
+    }
+
+    // Emit update to clients
+    io.emit('upload-history-update', getUploadHistoryForClient());
+}
+
+function getUploadHistoryForClient() {
+    const result = [];
+    uploadHistory.forEach((files, episodeCode) => {
+        result.push({
+            episodeCode,
+            podcastCode: files[0]?.podcastCode || 'N/A',
+            files: files,
+            totalFiles: files.length
+        });
+    });
+    // Sort by most recent upload
+    result.sort((a, b) => {
+        const aTime = a.files[0]?.timestamp || '';
+        const bTime = b.files[0]?.timestamp || '';
+        return bTime.localeCompare(aTime);
+    });
+    return result;
+}
+
 // File stability check - wait for file to finish writing
 async function waitForFileStability(filePath, fileName, onProgress) {
     const stabilityTime = 2000; // 2 seconds of stability required
@@ -514,6 +568,9 @@ async function processQueue() {
                 type: 'success',
                 details: finalUrl
             });
+
+            // Add to upload history
+            addToUploadHistory(episodeCode, podcastCode, fileName, finalUrl);
 
             // Clean up the local file after upload
             await fs.unlink(filePath).catch(err => console.error(`Failed to delete local file ${filePath}:`, err));
@@ -816,6 +873,14 @@ app.post('/premiere/start', async (_req, res) => {
     }
 });
 
+// Upload history endpoint
+app.get('/uploads/history', (_req, res) => {
+    res.status(200).json({
+        history: getUploadHistoryForClient(),
+        totalEpisodes: uploadHistory.size
+    });
+});
+
 // Cancel a job (queued or currently processing)
 app.delete('/render/:episodeCode', async (req, res) => {
     const { episodeCode } = req.params;
@@ -915,6 +980,9 @@ io.on('connection', (socket) => {
     });
 
     emitQueueUpdate();
+
+    // Send upload history
+    socket.emit('upload-history-update', getUploadHistoryForClient());
 
     socket.emit('log', {
         message: 'تم الاتصال بالخادم بنجاح',
