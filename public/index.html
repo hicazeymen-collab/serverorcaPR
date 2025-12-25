@@ -326,6 +326,161 @@
             margin-top: 6px;
         }
 
+        /* Failed Jobs Styles */
+        .failed-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-top: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            border-right: 4px solid #ef4444;
+        }
+
+        .failed-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #fecaca;
+        }
+
+        .failed-header h2 {
+            color: #ef4444;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .failed-count-badge {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: normal;
+        }
+
+        .failed-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .failed-job-item {
+            background: #fef2f2;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-right: 4px solid #ef4444;
+            transition: all 0.2s;
+        }
+
+        .failed-job-item:hover {
+            transform: translateX(-3px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+        }
+
+        .failed-job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .failed-job-title {
+            font-weight: bold;
+            color: #991b1b;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .failed-job-time {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        .failed-job-info {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 10px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .failed-job-reason {
+            background: #fee2e2;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #991b1b;
+            margin-bottom: 10px;
+        }
+
+        .failed-job-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-retry {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+        }
+
+        .btn-retry:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-delete-failed {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+        }
+
+        .btn-delete-failed:hover {
+            background: #fecaca;
+        }
+
+        .failed-empty {
+            text-align: center;
+            padding: 40px 20px;
+            color: #9ca3af;
+        }
+
+        .retry-badge {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 11px;
+            margin-right: 8px;
+        }
+
+        .queue-item.retry-job {
+            border-right-color: #f59e0b;
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        }
+
         /* Upload History Styles */
         .history-section {
             background: white;
@@ -1317,6 +1472,35 @@
                 </div>
             </div>
         </div>
+
+        <!-- Failed Jobs Section -->
+        <div class="failed-section" id="failedSection">
+            <div class="failed-header">
+                <h2>
+                    <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    الوظائف الفاشلة
+                    <span id="failedCount" class="failed-count-badge">(0)</span>
+                </h2>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-retry" id="retryAllBtn" onclick="retryAllFailed()" disabled>
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        إعادة محاولة الكل
+                    </button>
+                </div>
+            </div>
+            <div id="failedContainer" class="failed-container">
+                <div class="failed-empty">
+                    <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="opacity: 0.5; margin-bottom: 10px;">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <p>لا توجد وظائف فاشلة</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Notification Toast -->
@@ -1910,6 +2094,178 @@
             }
         }
 
+        // ===== Failed Jobs Management =====
+        let failedJobsData = [];
+
+        // Listen for failed jobs updates
+        socket.on('failed-jobs-update', (data) => {
+            failedJobsData = data.failedJobs || [];
+            renderFailedJobs();
+        });
+
+        socket.on('job-scheduled-retry', (data) => {
+            const delayMinutes = Math.round(data.delay / 60000);
+            showNotification(`سيتم إعادة محاولة ${data.job.episodeCode} بعد ${delayMinutes} دقيقة`, 'info');
+        });
+
+        socket.on('job-permanently-failed', (data) => {
+            showNotification(`فشلت الوظيفة نهائياً: ${data.job.episodeCode}`, 'error');
+        });
+
+        socket.on('job-requeued', (data) => {
+            showNotification(`تم إعادة الوظيفة للطابور: ${data.job.episodeCode}`, 'success');
+        });
+
+        socket.on('health-warning', (data) => {
+            showNotification(data.message, 'error');
+        });
+
+        socket.on('premiere-restarting', () => {
+            showNotification('جاري إعادة تشغيل Premiere Pro...', 'info');
+        });
+
+        socket.on('premiere-restarted', () => {
+            showNotification('تم إعادة تشغيل Premiere Pro', 'success');
+            checkPremiereStatus();
+        });
+
+        function renderFailedJobs() {
+            const container = document.getElementById('failedContainer');
+            const countEl = document.getElementById('failedCount');
+            const retryAllBtn = document.getElementById('retryAllBtn');
+
+            countEl.textContent = `(${failedJobsData.length})`;
+            retryAllBtn.disabled = failedJobsData.length === 0;
+
+            if (failedJobsData.length === 0) {
+                container.innerHTML = `
+                    <div class="failed-empty">
+                        <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="opacity: 0.5; margin-bottom: 10px;">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <p>لا توجد وظائف فاشلة</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = failedJobsData.map(job => `
+                <div class="failed-job-item">
+                    <div class="failed-job-header">
+                        <span class="failed-job-title">
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                            ${job.episodeCode}
+                        </span>
+                        <span class="failed-job-time">${formatFailedDate(job.failedAt || job.lastFailureTime)}</span>
+                    </div>
+                    <div class="failed-job-info">
+                        <span>Podcast: ${job.podcastCode || 'N/A'}</span>
+                        <span>Reels: ${job.reels?.length || 0}</span>
+                        <span>المحاولات: ${(job.retryCount || 0) + 1}</span>
+                    </div>
+                    <div class="failed-job-reason">
+                        السبب: ${job.lastFailureReason || 'timeout'}
+                    </div>
+                    <div class="failed-job-actions">
+                        <button class="btn-retry" onclick="retryFailedJob('${job.episodeCode}')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            إعادة المحاولة
+                        </button>
+                        <button class="btn-delete-failed" onclick="deleteFailedJob('${job.episodeCode}')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>
+                            حذف
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function formatFailedDate(timestamp) {
+            if (!timestamp) return 'غير معروف';
+            const date = new Date(timestamp);
+            return date.toLocaleString('ar-SA', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        async function retryFailedJob(episodeCode) {
+            try {
+                const response = await fetch(`/failed-jobs/${episodeCode}/retry`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(`تم إعادة الوظيفة: ${episodeCode}`, 'success');
+                } else {
+                    showNotification(data.error || 'فشل إعادة المحاولة', 'error');
+                }
+            } catch (error) {
+                console.error('Error retrying job:', error);
+                showNotification('حدث خطأ أثناء إعادة المحاولة', 'error');
+            }
+        }
+
+        async function retryAllFailed() {
+            if (!confirm('هل تريد إعادة محاولة جميع الوظائف الفاشلة؟')) return;
+
+            try {
+                const response = await fetch('/failed-jobs/retry-all', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification(`تم إعادة ${data.count} وظيفة`, 'success');
+                } else {
+                    showNotification(data.error || 'فشل إعادة المحاولة', 'error');
+                }
+            } catch (error) {
+                console.error('Error retrying all jobs:', error);
+                showNotification('حدث خطأ أثناء إعادة المحاولة', 'error');
+            }
+        }
+
+        async function deleteFailedJob(episodeCode) {
+            if (!confirm(`هل تريد حذف الوظيفة الفاشلة: ${episodeCode}؟`)) return;
+
+            try {
+                const response = await fetch(`/failed-jobs/${episodeCode}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    showNotification(`تم حذف الوظيفة: ${episodeCode}`, 'success');
+                } else {
+                    showNotification('فشل حذف الوظيفة', 'error');
+                }
+            } catch (error) {
+                console.error('Error deleting job:', error);
+                showNotification('حدث خطأ أثناء الحذف', 'error');
+            }
+        }
+
+        async function fetchFailedJobs() {
+            try {
+                const response = await fetch('/failed-jobs');
+                const data = await response.json();
+                failedJobsData = data.failedJobs || [];
+                renderFailedJobs();
+            } catch (error) {
+                console.error('Error fetching failed jobs:', error);
+            }
+        }
+
         async function togglePremiere() {
             if (premiereRunning) return;
 
@@ -2017,6 +2373,7 @@
             socket.emit('request-status');
             checkPremiereStatus();
             loadSavedProjectPath();
+            fetchFailedJobs();
         }, 500);
 
         // Periodic status update

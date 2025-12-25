@@ -208,12 +208,322 @@ async function notifyApp(episodeId, reelId, status, finalUrl = null, progress = 
     }
 }
 
-// Retry configuration
+// Retry configuration for GCS uploads
 const RETRY_CONFIG = {
     maxRetries: 3,
     baseDelay: 1000, // 1 second
     maxDelay: 10000  // 10 seconds max
 };
+
+// Job retry and queue configuration
+const JOB_RETRY_CONFIG = {
+    maxJobRetries: 3,                      // 3 retry attempts before permanent failure
+    retryDelays: [60000, 300000, 600000],  // 1 min, 5 min, 10 min
+    maxReelRetries: 2,                     // 2 retry attempts per reel
+    baseTimeout: 600000,                   // 10 minutes base timeout
+    perReelTimeout: 300000,                // 5 minutes per reel
+};
+
+// Health monitoring configuration
+const HEALTH_MONITOR_CONFIG = {
+    checkInterval: 30000,       // Check every 30 seconds
+    stuckThreshold: 300000,     // 5 minutes without progress = stuck
+    restartCooldown: 120000,    // 2 minutes between Premiere restarts
+};
+
+// SmartJobQueue Class - Priority queue with retry support
+class SmartJobQueue {
+    constructor() {
+        this.queue = [];
+        this.failedJobs = new Map(); // episodeCode -> job with failure info
+        this.lastProgressTime = Date.now();
+    }
+
+    // Calculate priority: higher = processed first
+    calculatePriority(job) {
+        let priority = 0;
+
+        // Retry jobs get +100 base priority
+        if (job.retryCount > 0) {
+            priority += 100;
+        }
+
+        // Smaller jobs (fewer reels) get higher priority
+        const reelCount = job.reels?.length || 1;
+        priority += Math.max(0, 20 - reelCount);
+
+        return priority;
+    }
+
+    // Insert job maintaining priority order
+    enqueue(job) {
+        job.retryCount = job.retryCount || 0;
+        job.reelRetries = job.reelRetries || {};
+        job.priority = this.calculatePriority(job);
+        job.queuedAt = Date.now();
+
+        // Find insertion point (descending priority)
+        let insertIndex = this.queue.findIndex(j => j.priority < job.priority);
+        if (insertIndex === -1) insertIndex = this.queue.length;
+
+        this.queue.splice(insertIndex, 0, job);
+        return insertIndex;
+    }
+
+    // Get next job from queue
+    dequeue() {
+        return this.queue.shift();
+    }
+
+    // Get queue length
+    get length() {
+        return this.queue.length;
+    }
+
+    // Calculate dynamic timeout based on reel count
+    calculateTimeout(job) {
+        const reelCount = job.reels?.length || 1;
+        return JOB_RETRY_CONFIG.baseTimeout + (reelCount * JOB_RETRY_CONFIG.perReelTimeout);
+    }
+
+    // Check if job should be retried
+    shouldRetryJob(job) {
+        return (job.retryCount || 0) < JOB_RETRY_CONFIG.maxJobRetries;
+    }
+
+    // Get retry delay based on attempt number
+    getRetryDelay(retryCount) {
+        const delays = JOB_RETRY_CONFIG.retryDelays;
+        return delays[Math.min(retryCount, delays.length - 1)];
+    }
+
+    // Schedule job for retry
+    scheduleRetry(job, reason) {
+        job.retryCount = (job.retryCount || 0) + 1;
+        job.lastFailureReason = reason;
+        job.lastFailureTime = Date.now();
+
+        const delay = this.getRetryDelay(job.retryCount - 1);
+        job.scheduledRetryTime = Date.now() + delay;
+
+        console.log(`[SmartQueue] Scheduling retry ${job.retryCount}/${JOB_RETRY_CONFIG.maxJobRetries} for ${job.episodeCode} in ${delay / 60000} minutes`);
+
+        setTimeout(() => {
+            this.enqueue(job);
+            io.emit('job-requeued', {
+                job,
+                retryCount: job.retryCount,
+                position: this.queue.length - 1
+            });
+            io.emit('log', {
+                message: `تمت إعادة الوظيفة للطابور: ${job.episodeCode}`,
+                type: 'info',
+                details: `المحاولة ${job.retryCount + 1}/${JOB_RETRY_CONFIG.maxJobRetries + 1}`
+            });
+            emitQueueUpdate();
+            process.nextTick(processQueue);
+        }, delay);
+
+        return { delay, retryCount: job.retryCount };
+    }
+
+    // Mark job as permanently failed
+    markAsFailed(job) {
+        job.failedAt = Date.now();
+        job.status = 'failed';
+        this.failedJobs.set(job.episodeCode, job);
+        io.emit('failed-jobs-update', { failedJobs: this.getFailedJobs() });
+        return job;
+    }
+
+    // Get all failed jobs
+    getFailedJobs() {
+        return Array.from(this.failedJobs.values());
+    }
+
+    // Retry a specific failed job
+    retryFailedJob(episodeCode) {
+        const job = this.failedJobs.get(episodeCode);
+        if (!job) return null;
+
+        // Reset retry count for manual retry
+        job.retryCount = 0;
+        job.reelRetries = {};
+        job.manualRetry = true;
+        delete job.failedAt;
+        delete job.status;
+
+        this.failedJobs.delete(episodeCode);
+        const position = this.enqueue(job);
+
+        io.emit('failed-jobs-update', { failedJobs: this.getFailedJobs() });
+
+        return { job, position };
+    }
+
+    // Retry all failed jobs
+    retryAllFailed() {
+        const jobs = this.getFailedJobs();
+        const results = [];
+
+        for (const job of jobs) {
+            const result = this.retryFailedJob(job.episodeCode);
+            if (result) results.push(result);
+        }
+
+        return results;
+    }
+
+    // Delete a failed job permanently
+    deleteFailedJob(episodeCode) {
+        const deleted = this.failedJobs.delete(episodeCode);
+        if (deleted) {
+            io.emit('failed-jobs-update', { failedJobs: this.getFailedJobs() });
+        }
+        return deleted;
+    }
+
+    // Update progress timestamp for health monitoring
+    recordProgress() {
+        this.lastProgressTime = Date.now();
+    }
+
+    // Check if processing is stuck
+    isStuck() {
+        if (!isProcessing) return false;
+        return (Date.now() - this.lastProgressTime) > HEALTH_MONITOR_CONFIG.stuckThreshold;
+    }
+
+    // Find job in queue by episodeCode
+    findIndex(episodeCode) {
+        return this.queue.findIndex(j => j.episodeCode === episodeCode);
+    }
+
+    // Remove job from queue by index
+    removeAt(index) {
+        if (index >= 0 && index < this.queue.length) {
+            return this.queue.splice(index, 1)[0];
+        }
+        return null;
+    }
+}
+
+// HealthMonitor Class - Monitors Premiere Pro and processing health
+class HealthMonitor {
+    constructor() {
+        this.checkInterval = null;
+        this.lastPremiereRestart = 0;
+    }
+
+    start() {
+        if (this.checkInterval) return;
+
+        this.checkInterval = setInterval(() => this.checkHealth(), HEALTH_MONITOR_CONFIG.checkInterval);
+        console.log('[HealthMonitor] Started monitoring every 30 seconds');
+    }
+
+    stop() {
+        if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+            this.checkInterval = null;
+            console.log('[HealthMonitor] Stopped monitoring');
+        }
+    }
+
+    async checkHealth() {
+        // Check if processing is stuck
+        if (smartQueue.isStuck()) {
+            console.warn('[HealthMonitor] Processing appears stuck - no progress for 5 minutes');
+
+            io.emit('health-warning', {
+                type: 'stuck',
+                message: 'المعالجة متوقفة - لم يتم إحراز أي تقدم لمدة 5 دقائق'
+            });
+            io.emit('log', {
+                message: 'تحذير: المعالجة متوقفة',
+                type: 'warning',
+                details: 'لم يتم إحراز أي تقدم لمدة 5 دقائق'
+            });
+
+            // Check Premiere Pro status
+            const premiereRunning = await isPremiereRunning();
+
+            if (!premiereRunning && isProcessing) {
+                console.warn('[HealthMonitor] Premiere Pro not running during processing - attempting restart');
+                await this.restartPremiere();
+            }
+        }
+
+        // Periodic Premiere Pro check during processing
+        if (isProcessing) {
+            const premiereRunning = await isPremiereRunning();
+            if (!premiereRunning) {
+                console.warn('[HealthMonitor] Premiere Pro crashed during processing');
+                io.emit('health-warning', {
+                    type: 'premiere_crash',
+                    message: 'توقف Adobe Premiere Pro أثناء المعالجة'
+                });
+                await this.restartPremiere();
+            }
+        }
+    }
+
+    async restartPremiere() {
+        const now = Date.now();
+        const cooldown = HEALTH_MONITOR_CONFIG.restartCooldown;
+
+        if (now - this.lastPremiereRestart < cooldown) {
+            console.log('[HealthMonitor] Premiere restart on cooldown, skipping');
+            return false;
+        }
+
+        this.lastPremiereRestart = now;
+
+        io.emit('log', {
+            message: 'جاري إعادة تشغيل Adobe Premiere Pro تلقائياً...',
+            type: 'warning'
+        });
+        io.emit('premiere-restarting', {});
+
+        // Kill any hanging Premiere process first
+        await this.killPremiere();
+        await sleep(3000);
+
+        // Start Premiere
+        const started = await startPremiere();
+
+        if (started) {
+            // Update progress time to give Premiere time to initialize
+            smartQueue.recordProgress();
+
+            io.emit('log', {
+                message: 'تم إعادة تشغيل Premiere Pro بنجاح',
+                type: 'success'
+            });
+            io.emit('premiere-restarted', {});
+            return true;
+        }
+
+        return false;
+    }
+
+    async killPremiere() {
+        return new Promise((resolve) => {
+            exec('taskkill /IM "Adobe Premiere Pro.exe" /F', { windowsHide: true }, (error) => {
+                if (error) {
+                    console.log('[HealthMonitor] No Premiere process to kill or error:', error.message);
+                } else {
+                    console.log('[HealthMonitor] Premiere Pro process killed');
+                }
+                resolve();
+            });
+        });
+    }
+}
+
+// Initialize SmartJobQueue and HealthMonitor
+const smartQueue = new SmartJobQueue();
+const healthMonitor = new HealthMonitor();
 
 async function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -317,7 +627,7 @@ async function uploadToGCS(localPath, gcsPath, onProgress, retryCount = 0) {
 }
 
 // --- Main Server Logic ---
-const jobQueue = [];
+// Note: jobQueue replaced by smartQueue (SmartJobQueue class)
 let isProcessing = false;
 let watcher = null;
 let currentJob = null; // Track currently processing job
@@ -457,23 +767,41 @@ async function setupWatcher() {
 
 
 async function processQueue() {
-    if (isProcessing || jobQueue.length === 0) {
+    if (isProcessing || smartQueue.length === 0) {
         return;
     }
     isProcessing = true;
     jobCancelled = false; // Reset cancellation flag
-    const job = jobQueue.shift();
+    const job = smartQueue.dequeue();
     currentJob = job; // Track current job for cancellation
     const { episodeId, reels, podcastCode, episodeCode } = job;
 
+    // Calculate dynamic timeout based on number of reels
+    const dynamicTimeout = smartQueue.calculateTimeout(job);
+    const timeoutMinutes = Math.round(dynamicTimeout / 60000);
+
     console.log(`[Queue] Starting processing for job: ${episodeCode}`);
+    console.log(`[Queue] Dynamic timeout: ${timeoutMinutes} minutes for ${reels.length} reels`);
+
+    // Record progress for health monitoring
+    smartQueue.recordProgress();
+
+    // Log retry info if applicable
+    if (job.retryCount > 0) {
+        console.log(`[Queue] This is retry attempt ${job.retryCount}/${JOB_RETRY_CONFIG.maxJobRetries}`);
+        io.emit('log', {
+            message: `إعادة محاولة الوظيفة: ${episodeCode}`,
+            type: 'warning',
+            details: `المحاولة ${job.retryCount + 1}/${JOB_RETRY_CONFIG.maxJobRetries + 1}`
+        });
+    }
 
     // Emit job started event
-    io.emit('job-started', job);
+    io.emit('job-started', { ...job, dynamicTimeout, timeoutMinutes });
     io.emit('log', {
         message: `بدء معالجة الوظيفة: ${episodeCode}`,
         type: 'info',
-        details: `${reels.length} ريل في قائمة الانتظار`
+        details: `${reels.length} ريل - المهلة: ${timeoutMinutes} دقيقة`
     });
 
     // Initialize reel progress tracking
@@ -805,28 +1133,60 @@ async function processQueue() {
     watcher.on('add', onFileAdd);
 
     const jobTimeout = setTimeout(async () => {
-         console.error(`[Job Timeout] Job for ${episodeCode} timed out after 30 minutes.`);
+         console.error(`[Job Timeout] Job for ${episodeCode} timed out after ${timeoutMinutes} minutes.`);
          watcher?.off('add', onFileAdd);
-         reels.forEach((reel) => {
-             if (!processedReelIds.has(reel.id)) {
-                 notifyApp(episodeId, reel.id, 'failed', null, 100, "Render job timed out on the server.");
-             }
-         });
-         io.emit('log', {
-             message: `انتهت مهلة الوظيفة: ${episodeCode}`,
-             type: 'error',
-             details: 'تم تجاوز 30 دقيقة - تم نقل الوظيفة إلى مجلد الفاشلة'
-         });
 
-         // Move job to Failed folder instead of deleting
-         await moveJobToFailed(job);
+         // Check if job should be retried
+         if (smartQueue.shouldRetryJob(job)) {
+             // Schedule retry
+             const { delay, retryCount } = smartQueue.scheduleRetry(job, 'timeout');
+             const delayMinutes = Math.round(delay / 60000);
+
+             io.emit('log', {
+                 message: `انتهت مهلة الوظيفة: ${episodeCode}`,
+                 type: 'warning',
+                 details: `سيتم إعادة المحاولة بعد ${delayMinutes} دقيقة (المحاولة ${retryCount}/${JOB_RETRY_CONFIG.maxJobRetries})`
+             });
+             io.emit('job-scheduled-retry', {
+                 job,
+                 delay,
+                 retryCount,
+                 reason: 'timeout'
+             });
+
+             // Don't notify app as failed yet - we're retrying
+             console.log(`[Job Timeout] Job ${episodeCode} will retry in ${delayMinutes} minutes`);
+         } else {
+             // Max retries exceeded - permanent failure
+             console.error(`[Job Timeout] Job ${episodeCode} exceeded max retries, marking as permanently failed`);
+
+             reels.forEach((reel) => {
+                 if (!processedReelIds.has(reel.id)) {
+                     notifyApp(episodeId, reel.id, 'failed', null, 100, "Render job timed out after all retry attempts.");
+                 }
+             });
+
+             io.emit('log', {
+                 message: `فشلت الوظيفة نهائياً: ${episodeCode}`,
+                 type: 'error',
+                 details: `تم استنفاد جميع المحاولات (${JOB_RETRY_CONFIG.maxJobRetries + 1})`
+             });
+             io.emit('job-permanently-failed', {
+                 job,
+                 reason: 'max_retries_exceeded'
+             });
+
+             // Move job to Failed folder
+             await moveJobToFailed(job);
+             smartQueue.markAsFailed(job);
+         }
 
          reelProgressMap.delete(progressKey);
          currentJob = null;
          isProcessing = false;
          emitQueueUpdate();
          process.nextTick(processQueue);
-    }, 30 * 60 * 1000);
+    }, dynamicTimeout);
 
     // Also check for cancellation periodically
     const cancellationCheck = setInterval(() => {
@@ -839,18 +1199,31 @@ async function processQueue() {
 
 // Helper function to emit queue updates
 function emitQueueUpdate() {
-    const queueWithProgress = jobQueue.map((job, index) => {
+    const queueWithProgress = smartQueue.queue.map((job, index) => {
+        const baseJob = { ...job };
+
+        // Add progress data to the currently processing job
         if (index === 0 && isProcessing) {
-            // Add progress data to the currently processing job
             const progress = reelProgressMap.get(job.episodeCode);
-            return { ...job, reelProgress: progress };
+            baseJob.reelProgress = progress;
         }
-        return job;
+
+        // Include retry info
+        baseJob.isRetry = (job.retryCount || 0) > 0;
+        baseJob.retryInfo = {
+            count: job.retryCount || 0,
+            maxRetries: JOB_RETRY_CONFIG.maxJobRetries,
+            scheduledRetryTime: job.scheduledRetryTime
+        };
+
+        return baseJob;
     });
 
     io.emit('queue-update', queueWithProgress);
+    io.emit('failed-jobs-update', { failedJobs: smartQueue.getFailedJobs() });
     io.emit('status-update', {
-        queueLength: jobQueue.length,
+        queueLength: smartQueue.length,
+        failedCount: smartQueue.failedJobs.size,
         isProcessing
     });
 }
@@ -862,7 +1235,8 @@ app.get('/status', async (_req, res) => {
     res.status(200).json({
         status: 'ok',
         message: `Render V2 server is running.`,
-        queueLength: jobQueue.length,
+        queueLength: smartQueue.length,
+        failedCount: smartQueue.failedJobs.size,
         isProcessing,
         watching: watcher ? RENDER_JOBS_DIR : "Not watching",
         premiere: {
@@ -917,6 +1291,211 @@ app.get('/uploads/history', (_req, res) => {
     });
 });
 
+// ===== Failed Jobs Management API =====
+
+// Get all failed jobs
+app.get('/failed-jobs', async (_req, res) => {
+    try {
+        // Get from memory
+        const memoryFailed = smartQueue.getFailedJobs();
+
+        // Also scan failed jobs directory for persisted failures
+        let diskFailed = [];
+        try {
+            const files = await fs.readdir(FAILED_JOBS_DIR);
+            const jsonFiles = files.filter(f => f.endsWith('.json'));
+
+            for (const file of jsonFiles) {
+                const content = await fs.readFile(path.join(FAILED_JOBS_DIR, file), 'utf8');
+                const job = JSON.parse(content);
+                // Only add if not already in memory
+                if (!memoryFailed.find(j => j.episodeCode === job.episodeCode)) {
+                    job.fromDisk = true;
+                    diskFailed.push(job);
+                }
+            }
+        } catch (e) {
+            // Directory might not exist - that's ok
+        }
+
+        const allFailed = [...memoryFailed, ...diskFailed];
+
+        res.status(200).json({
+            failedJobs: allFailed,
+            count: allFailed.length
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Retry a specific failed job
+app.post('/failed-jobs/:episodeCode/retry', async (req, res) => {
+    const { episodeCode } = req.params;
+
+    try {
+        // Check memory first
+        let result = smartQueue.retryFailedJob(episodeCode);
+
+        if (!result) {
+            // Check disk
+            const files = await fs.readdir(FAILED_JOBS_DIR).catch(() => []);
+            const matchingFile = files.find(f => f.includes(episodeCode) && f.endsWith('.json'));
+
+            if (matchingFile) {
+                const content = await fs.readFile(path.join(FAILED_JOBS_DIR, matchingFile), 'utf8');
+                const job = JSON.parse(content);
+
+                // Reset and enqueue
+                job.retryCount = 0;
+                job.reelRetries = {};
+                job.manualRetry = true;
+                delete job.failedAt;
+                delete job.status;
+
+                const position = smartQueue.enqueue(job);
+
+                // Remove from failed directory
+                await fs.unlink(path.join(FAILED_JOBS_DIR, matchingFile));
+
+                result = { job, position };
+            }
+        }
+
+        if (result) {
+            io.emit('job-requeued', result);
+            io.emit('log', {
+                message: `تم إعادة الوظيفة للطابور: ${episodeCode}`,
+                type: 'success'
+            });
+            emitQueueUpdate();
+            process.nextTick(processQueue);
+
+            res.status(200).json({
+                message: `Job ${episodeCode} has been requeued`,
+                position: result.position
+            });
+        } else {
+            res.status(404).json({ error: `Failed job ${episodeCode} not found` });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Retry all failed jobs
+app.post('/failed-jobs/retry-all', async (_req, res) => {
+    try {
+        const results = smartQueue.retryAllFailed();
+        let diskCount = 0;
+
+        // Also process disk failures
+        const files = await fs.readdir(FAILED_JOBS_DIR).catch(() => []);
+        const jsonFiles = files.filter(f => f.endsWith('.json'));
+
+        for (const file of jsonFiles) {
+            try {
+                const content = await fs.readFile(path.join(FAILED_JOBS_DIR, file), 'utf8');
+                const job = JSON.parse(content);
+                job.retryCount = 0;
+                job.reelRetries = {};
+                job.manualRetry = true;
+                smartQueue.enqueue(job);
+                await fs.unlink(path.join(FAILED_JOBS_DIR, file));
+                diskCount++;
+            } catch (e) {
+                console.error(`[Failed Jobs] Error processing ${file}:`, e.message);
+            }
+        }
+
+        const total = results.length + diskCount;
+
+        io.emit('all-failed-requeued', { count: total });
+        io.emit('log', {
+            message: `تم إعادة ${total} وظيفة فاشلة للطابور`,
+            type: 'success'
+        });
+        emitQueueUpdate();
+        process.nextTick(processQueue);
+
+        res.status(200).json({
+            message: `${total} failed jobs have been requeued`,
+            count: total
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete a failed job
+app.delete('/failed-jobs/:episodeCode', async (req, res) => {
+    const { episodeCode } = req.params;
+
+    try {
+        // Remove from memory
+        smartQueue.deleteFailedJob(episodeCode);
+
+        // Remove from disk
+        const files = await fs.readdir(FAILED_JOBS_DIR).catch(() => []);
+        const matchingFile = files.find(f => f.includes(episodeCode) && f.endsWith('.json'));
+
+        if (matchingFile) {
+            await fs.unlink(path.join(FAILED_JOBS_DIR, matchingFile));
+        }
+
+        io.emit('failed-job-deleted', { episodeCode });
+        io.emit('log', {
+            message: `تم حذف الوظيفة الفاشلة: ${episodeCode}`,
+            type: 'info'
+        });
+        emitQueueUpdate();
+
+        res.status(200).json({
+            message: `Failed job ${episodeCode} deleted`
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Health status endpoint
+app.get('/health', async (_req, res) => {
+    const premiereRunning = await isPremiereRunning();
+    const isStuck = smartQueue.isStuck();
+
+    res.status(200).json({
+        status: isStuck ? 'degraded' : 'healthy',
+        processing: isProcessing,
+        queueLength: smartQueue.length,
+        failedCount: smartQueue.failedJobs.size,
+        premiere: {
+            running: premiereRunning
+        },
+        lastProgressTime: smartQueue.lastProgressTime,
+        stuckWarning: isStuck
+    });
+});
+
+// Force restart Premiere Pro
+app.post('/premiere/restart', async (_req, res) => {
+    try {
+        const success = await healthMonitor.restartPremiere();
+
+        if (success) {
+            res.status(200).json({
+                message: 'Premiere Pro restarted successfully',
+                status: 'restarted'
+            });
+        } else {
+            res.status(500).json({
+                error: 'Failed to restart Premiere Pro or on cooldown'
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Cancel a job (queued or currently processing)
 app.delete('/render/:episodeCode', async (req, res) => {
     const { episodeCode } = req.params;
@@ -938,9 +1517,9 @@ app.delete('/render/:episodeCode', async (req, res) => {
     }
 
     // Check if it's in the queue
-    const jobIndex = jobQueue.findIndex(j => j.episodeCode === episodeCode);
+    const jobIndex = smartQueue.findIndex(episodeCode);
     if (jobIndex !== -1) {
-        const removedJob = jobQueue.splice(jobIndex, 1)[0];
+        const removedJob = smartQueue.removeAt(jobIndex);
 
         // Delete the job JSON file
         const jsonFilename = `job-${removedJob.episodeCode}-${removedJob.timestamp}.json`;
@@ -987,17 +1566,22 @@ app.post('/render', async (req, res) => {
         await fs.writeFile(jsonFilePath, JSON.stringify(job, null, 2));
         console.log(`[Queue] Saved job JSON to ${jsonFilePath}`);
 
-        jobQueue.push(job);
+        const position = smartQueue.enqueue(job);
+        console.log(`[Queue] Job added at position ${position} with priority ${job.priority}`);
 
         // Emit queue update to connected clients
         io.emit('log', {
             message: `وظيفة جديدة مضافة: ${job.episodeCode}`,
             type: 'info',
-            details: `${job.reels.length} ريل في الطلب`
+            details: `${job.reels.length} ريل - الموقع: ${position + 1}`
         });
         emitQueueUpdate();
 
-        res.status(202).json({ message: "Render job accepted and queued for processing." });
+        res.status(202).json({
+            message: "Render job accepted and queued for processing.",
+            position: position,
+            priority: job.priority
+        });
         process.nextTick(processQueue);
     } catch(e) {
         console.error(`[API /render] Failed to save job file:`, e);
@@ -1011,7 +1595,8 @@ io.on('connection', (socket) => {
 
     // Send current status on connection
     socket.emit('status-update', {
-        queueLength: jobQueue.length,
+        queueLength: smartQueue.length,
+        failedCount: smartQueue.failedJobs.size,
         isProcessing
     });
 
@@ -1019,6 +1604,9 @@ io.on('connection', (socket) => {
 
     // Send upload history
     socket.emit('upload-history-update', getUploadHistoryForClient());
+
+    // Send failed jobs
+    socket.emit('failed-jobs-update', { failedJobs: smartQueue.getFailedJobs() });
 
     socket.emit('log', {
         message: 'تم الاتصال بالخادم بنجاح',
@@ -1028,7 +1616,8 @@ io.on('connection', (socket) => {
     // Handle status request
     socket.on('request-status', () => {
         socket.emit('status-update', {
-            queueLength: jobQueue.length,
+            queueLength: smartQueue.length,
+            failedCount: smartQueue.failedJobs.size,
             isProcessing
         });
         emitQueueUpdate();
@@ -1044,6 +1633,31 @@ io.on('connection', (socket) => {
     });
 });
 
+// --- Load Failed Jobs from Disk ---
+async function loadFailedJobsFromDisk() {
+    try {
+        const files = await fs.readdir(FAILED_JOBS_DIR);
+        const jsonFiles = files.filter(f => f.endsWith('.json'));
+
+        for (const file of jsonFiles) {
+            try {
+                const content = await fs.readFile(path.join(FAILED_JOBS_DIR, file), 'utf8');
+                const job = JSON.parse(content);
+                job.fromDisk = true;
+                smartQueue.failedJobs.set(job.episodeCode, job);
+            } catch (e) {
+                console.error(`[Startup] Error loading failed job ${file}:`, e.message);
+            }
+        }
+
+        if (jsonFiles.length > 0) {
+            console.log(`[Startup] Loaded ${jsonFiles.length} failed jobs from disk`);
+        }
+    } catch (e) {
+        // Directory might not exist - that's ok
+    }
+}
+
 // --- Server Start ---
 server.listen(PORT, '0.0.0.0', async () => {
     await setupWatcher();
@@ -1051,16 +1665,27 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log(`[Server] Dashboard available at: http://localhost:${PORT}`);
     console.log(`[Server] This server will save incoming JSON jobs and watch for .mp4 outputs.`);
 
+    // Load failed jobs from disk
+    await loadFailedJobsFromDisk();
+
+    // Start health monitor
+    healthMonitor.start();
+    console.log('[Server] Health monitor started');
+
     // Start Premiere Pro if configured
     if (PREMIERE_CONFIG.autoStart) {
         console.log('[Server] Checking Adobe Premiere Pro...');
         await ensurePremiereRunning();
     }
+
+    // Log configuration
+    console.log(`[Server] Smart Queue Config: Max Retries=${JOB_RETRY_CONFIG.maxJobRetries}, Base Timeout=${JOB_RETRY_CONFIG.baseTimeout/60000}min`);
 });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log('\n[Server] SIGINT received. Closing watcher and shutting down.');
+    healthMonitor.stop();
     if (watcher) await watcher.close();
     io.close();
     process.exit(0);
