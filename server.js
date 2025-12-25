@@ -755,7 +755,7 @@ async function setupWatcher() {
     console.log(`[Watcher] Setting up new file watcher for directory: ${RENDER_JOBS_DIR}`);
 
     watcher = chokidar.watch(RENDER_JOBS_DIR, {
-        ignored: /(^|[\/\\])\..*|.*\.json$/, // Ignore dotfiles and json files
+        ignored: /(^|[\/\\])\..*|.*\.json$|[\/\\]Failed[\/\\]|[\/\\]Failed$/, // Ignore dotfiles, json files, and Failed subfolder
         persistent: true,
         ignoreInitial: true,
     });
@@ -1136,50 +1136,29 @@ async function processQueue() {
          console.error(`[Job Timeout] Job for ${episodeCode} timed out after ${timeoutMinutes} minutes.`);
          watcher?.off('add', onFileAdd);
 
-         // Check if job should be retried
-         if (smartQueue.shouldRetryJob(job)) {
-             // Schedule retry
-             const { delay, retryCount } = smartQueue.scheduleRetry(job, 'timeout');
-             const delayMinutes = Math.round(delay / 60000);
+         // Notify app about all unprocessed reels as failed
+         // App needs to send a new job for retry (Premiere doesn't re-export same files)
+         const unprocessedReels = reels.filter(reel => !processedReelIds.has(reel.id));
 
-             io.emit('log', {
-                 message: `انتهت مهلة الوظيفة: ${episodeCode}`,
-                 type: 'warning',
-                 details: `سيتم إعادة المحاولة بعد ${delayMinutes} دقيقة (المحاولة ${retryCount}/${JOB_RETRY_CONFIG.maxJobRetries})`
-             });
-             io.emit('job-scheduled-retry', {
-                 job,
-                 delay,
-                 retryCount,
-                 reason: 'timeout'
-             });
-
-             // Don't notify app as failed yet - we're retrying
-             console.log(`[Job Timeout] Job ${episodeCode} will retry in ${delayMinutes} minutes`);
-         } else {
-             // Max retries exceeded - permanent failure
-             console.error(`[Job Timeout] Job ${episodeCode} exceeded max retries, marking as permanently failed`);
-
-             reels.forEach((reel) => {
-                 if (!processedReelIds.has(reel.id)) {
-                     notifyApp(episodeId, reel.id, 'failed', null, 100, "Render job timed out after all retry attempts.");
-                 }
-             });
-
-             io.emit('log', {
-                 message: `فشلت الوظيفة نهائياً: ${episodeCode}`,
-                 type: 'error',
-                 details: `تم استنفاد جميع المحاولات (${JOB_RETRY_CONFIG.maxJobRetries + 1})`
-             });
-             io.emit('job-permanently-failed', {
-                 job,
-                 reason: 'max_retries_exceeded'
-             });
-
-             // Move job to Failed folder
-             await moveJobToFailed(job);
-             smartQueue.markAsFailed(job);
+         for (const reel of unprocessedReels) {
+             await notifyApp(episodeId, reel.id, 'failed', null, 100, "Render job timed out. Please send a new render request.");
          }
+
+         io.emit('log', {
+             message: `فشلت الوظيفة: ${episodeCode}`,
+             type: 'error',
+             details: `انتهت المهلة (${timeoutMinutes} دقيقة) - يجب إرسال طلب جديد من التطبيق`
+         });
+         io.emit('job-failed', {
+             job,
+             reason: 'timeout',
+             unprocessedReels: unprocessedReels.length,
+             message: 'يجب إرسال وظيفة جديدة من التطبيق لإعادة المحاولة'
+         });
+
+         // Move job to Failed folder for review
+         await moveJobToFailed(job);
+         smartQueue.markAsFailed(job);
 
          reelProgressMap.delete(progressKey);
          currentJob = null;
